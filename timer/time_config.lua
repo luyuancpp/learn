@@ -19,6 +19,7 @@ s_game_time_config.type = {
     season_cycle = 15,            -- 赛季循环
     timezone_adapt = 16,          -- 时区适配
     limit_daily_times = 17,       -- 每日次数限制+时段
+    after_server_open_permanent = 18,  -- 开服后N天解锁，永久生效
 }
 
 -- 全局状态存储
@@ -137,7 +138,7 @@ function s_game_time_config.get_server_open_days(check_time)
     return math.max(0, day_diff(check_time, s_game_time_config.global_state.server_open_time))
 end
 
--- 原有配置创建方法
+-- 配置创建方法
 function s_game_time_config.create_fixed_period(start_time_str, end_time_str)
     local start_ts = str_to_timestamp(start_time_str)
     local end_ts = str_to_timestamp(end_time_str)
@@ -215,6 +216,23 @@ function s_game_time_config.create_after_server_open(days)
     }
 end
 
+-- 新增：开服后N天解锁，永久生效
+function s_game_time_config.create_after_server_open_permanent(unlock_days)
+    assert(s_game_time_config.global_state.server_open_time, "请先调用init初始化配置")
+    assert(unlock_days >= 0, "解锁天数不能为负数（0表示开服即永久生效）")
+    
+    local unlock_ts = s_game_time_config.global_state.server_open_time + unlock_days * 86400
+    return {
+        type = s_game_time_config.type.after_server_open_permanent,
+        unlock_days = unlock_days,
+        unlock_ts = unlock_ts,
+        unlock_str = timestamp_to_str(unlock_ts),
+        desc = unlock_days == 0 
+            and "开服即永久生效" 
+            or string.format("开服%d天后永久生效", unlock_days)
+    }
+end
+
 function s_game_time_config.create_daily(start_time_str, end_time_str)
     local start_ts = str_to_timestamp(start_time_str)
     local end_ts = str_to_timestamp(end_time_str)
@@ -272,7 +290,6 @@ function s_game_time_config.create_weekly(start_weekday, start_time_str, end_wee
     }
 end
 
--- 新增场景化配置创建方法
 function s_game_time_config.create_circular_fixed_interval(interval_hours, duration_minutes)
     assert(interval_hours > 0 and duration_minutes > 0, "间隔和时长必须大于0")
     return {
@@ -496,6 +513,10 @@ function s_game_time_config.is_in_time(config, check_time, extra_data)
     elseif config.type == s_game_time_config.type.after_server_open then
         return check_time >= config.start and check_time <= config["end"]
         
+    elseif config.type == s_game_time_config.type.after_server_open_permanent then
+        -- 开服后N天解锁，永久生效（只要当前时间晚于解锁时间即生效）
+        return check_time >= config.unlock_ts
+        
     elseif config.type == s_game_time_config.type.daily then
         local date = os.date("*t", check_time)
         local check_minutes = date.hour * 60 + date.min
@@ -678,30 +699,3 @@ s_game_time_config.utils = {
 }
 
 return s_game_time_config
-
-
--- 测试代码
-local s_game_time_config = require("s_game_time_config")
-s_game_time_config.init("202501010800", 8) -- 开服时间+玩家时区偏移（东8区）
-
--- 新增配置示例
-local every2_hour = s_game_time_config.create_circular_fixed_interval(2, 30) -- 每2小时一次，每次30分钟
-local monthly1_and_15 = s_game_time_config.create_monthly_fixed_date({1,15}, "202501011000", "202501012200") -- 每月1/15号10-22点
-local need2_hour_online = s_game_time_config.create_cumulative_online_time(7200) -- 累计在线2小时
-local anniversary365 = s_game_time_config.create_server_open_anniversary(365, 7) -- 开服1周年，持续7天
-local spring_festival = s_game_time_config.create_holiday_fixed({
-    {start_time_str="202501290000", end_time_str="202502042359"}
-}) -- 春节活动
-local cross_day = s_game_time_config.create_cross_day_cycle("202501012300", "202501010200") -- 23点-次日2点
-local random_daily = s_game_time_config.create_random_interval(3, 60, 4) -- 每天最多3次，每次1小时，间隔≥4小时
-local level30_daily = s_game_time_config.create_level_locked_daily(30, "202501011900", "202501012100") -- 30级解锁，每天19-21点
-local season90_days = s_game_time_config.create_season_cycle(90, "202501010500", "202501012359") -- 90天赛季，每日5点-24点
-local timezone18_to_20 = s_game_time_config.create_timezone_adapt(18, 20) -- 玩家时区18-20点
-local daily3_times = s_game_time_config.create_limit_daily_times(3, "202501011000", "202501012200") -- 10-22点，最多3次
-
--- 检查示例
-print("是否在每2小时循环内:", s_game_time_config.is_in_time(every2_hour))
-print("是否满足累计在线2小时:", s_game_time_config.is_in_time(need2_hour_online))
-print("30级玩家是否可参与每日活动:", s_game_time_config.is_in_time(level30_daily, nil, {player_level=30}))
-print("玩家时区是否18-20点:", s_game_time_config.is_in_time(timezone18_to_20))
-print("今日是否还能参与（已用2次）:", s_game_time_config.is_in_time(daily3_times, nil, {used_times_today=2}))
